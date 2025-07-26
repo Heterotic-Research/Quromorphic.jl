@@ -1,385 +1,1034 @@
 module QSim
 
 using LinearAlgebra
+using Graphs
+using SparseArrays
+using Statistics
+using ITensors
 
-export statevector,cnot!,measure_z,swap!, u2!, h!, x!, y!, z!, rx!, ry!, rz!, crx!, cry!, crz!, mp, prstate, measure_x,measure_y, density_matrix,nb,id,statevector_to_density_matrix ,X,Y,Z,I2
+export QuantumCircuit, StateVectorRep, TensorNetworkRep, create_quantum_simulator, add_gate!, 
+       run_circuit, compute_unitary, get_measurement_probabilities, 
+       print_state_probabilities, measure_z, measure_x, measure_y,
+       linear_circuit, lattice_2d_circuit,
+       circuit_gate_count, total_gate_count, circuit_depth, circuit_width,
+       two_qubit_gate_count, single_qubit_gate_count, circuit_layers,
+       print_circuit_summary, circuit_parallelism, critical_path_analysis,
+       estimate_execution_time, create_bell_circuit, create_ghz_circuit,
+       display_state,create_qft_circuit
 
-# Core Constants 
-const c1 = ComplexF64(1)
-const im_F64 = ComplexF64(0, 1)
-const I2 = Matrix{ComplexF64}([1 0; 0 1])
+# ====================================================================
+# QUANTUM STATE REPRESENTATIONS
+# ====================================================================
 
-const H = ComplexF64(1/√2) * Matrix{ComplexF64}([1 1; 1 -1])
-const X = Matrix{ComplexF64}([0 1; 1 0])
-const Y = Matrix{ComplexF64}([0 -im_F64; im_F64 0])
-const Z = Matrix{ComplexF64}([1 0; 0 -1])
-const P0 = Matrix{ComplexF64}([1 0; 0 0])
-const P1 = Matrix{ComplexF64}([0 0; 0 1])
+abstract type AbstractQuantumState end
 
-# Precomputed rotation gates for common angles
-const RX_PI_2 = ComplexF64(cos(π/4))*I2 - im_F64*ComplexF64(sin(π/4))*X
-const RY_PI_2 = ComplexF64(cos(π/4))*I2 - im_F64*ComplexF64(sin(π/4))*Y
-const RZ_PI_2 = ComplexF64(cos(π/4))*I2 - im_F64*ComplexF64(sin(π/4))*Z
+mutable struct StateVectorRep <: AbstractQuantumState
+    data::Vector{ComplexF64}
+    n_qubits::Int
+end
 
-# Rotation gate caches for performance
+# Original-style tensor network (dense vector with ITensor indices)
+mutable struct TensorNetworkRep <: AbstractQuantumState
+    state_vector::Vector{ComplexF64}
+    sites::Vector{Index}
+    graph::SimpleGraph{Int64}
+    n_qubits::Int
+end
+
+mutable struct QuantumCircuit
+    n_qubits::Int
+    state::AbstractQuantumState
+    gates::Vector{Dict{Symbol,Any}}
+    graph::SimpleGraph{Int}
+    backend::Symbol  # :statevector or :tensornetwork
+end
+
+# ====================================================================
+# GATE MATRICES AND CONSTANTS
+# ====================================================================
+
+const I2 = ComplexF64[1 0; 0 1]
+const X = ComplexF64[0 1; 1 0]
+const Y = ComplexF64[0 -im; im 0]
+const Z = ComplexF64[1 0; 0 -1]
+const H = (1/sqrt(2)) * ComplexF64[1 1; 1 -1]
+const S = ComplexF64[1 0; 0 im]
+const T = ComplexF64[1 0; 0 exp(im*π/4)]
+
+# Pauli projectors
+const P0 = ComplexF64[1 0; 0 0]
+const P1 = ComplexF64[0 0; 0 1]
+
+# Gate caches for performance
 const RX_CACHE = Dict{Float64, Matrix{ComplexF64}}()
 const RY_CACHE = Dict{Float64, Matrix{ComplexF64}}()
 const RZ_CACHE = Dict{Float64, Matrix{ComplexF64}}()
 
-function id(n::Int)
-    n == 0 ? Matrix{ComplexF64}([c1;;]) : Diagonal(ones(ComplexF64, 1 << n))
-end
-
-function statevector(n::Int, m::Int)
-    s = zeros(ComplexF64, 1 << n)
-    s[m+1] = c1 
-    s
-end
-
-function statevector_to_density_matrix(s::Vector{ComplexF64})
-    return s * s'
-end
-
-function density_matrix(n::Int, m::Int)
-    s = statevector(n, m)
-    return statevector_to_density_matrix(s)
-end
-
-nb(s::Vector{ComplexF64}) = round(Int, log2(length(s)))
-nb(rho::Matrix{ComplexF64}) = round(Int, log2(size(rho, 1)))
-
-
-function u2!(s::Vector{ComplexF64}, t::Int, U::Matrix{ComplexF64})
-    q = nb(s)
-    t <= q || error("Qubit index out of range")
-    
-    l = t - 1
-    r = q - t
-    op = kron(id(r), kron(U, id(l)))
-    temp = similar(s)
-    mul!(temp, op, s)
-    copyto!(s, temp)
-    s
-end
-
-
-
-function u2!(rho::Matrix{ComplexF64}, t::Int, U::Matrix{ComplexF64})
-    q = round(Int, log2(size(rho,1)))
-    t <= q || error("Qubit index out of range")
-    
-    l = t - 1
-    r = q - t
-    op = kron(id(r), kron(U, id(l)))
-    
-    temp = similar(rho)
-    mul!(temp, op, rho)
-    mul!(rho, temp, op')
-    rho
-end
-
-function h!(s::Vector{ComplexF64}, t::Int)
-    u2!(s, t, H)
-end
-
-function h!(rho::Matrix{ComplexF64}, t::Int)
-    u2!(rho, t, H)
-end
-
-function x!(s::Vector{ComplexF64}, t::Int)
-    u2!(s, t, X)
-end
-
-function x!(rho::Matrix{ComplexF64}, t::Int)
-    u2!(rho, t, X)
-end
-
-function y!(s::Vector{ComplexF64}, t::Int)
-    u2!(s, t, Y)
-end
-
-function y!(rho::Matrix{ComplexF64}, t::Int)
-    u2!(rho, t, Y)
-end
-
-function z!(s::Vector{ComplexF64}, t::Int)
-    u2!(s, t, Z)
-end
-
-function z!(rho::Matrix{ComplexF64}, t::Int)
-    u2!(rho, t, Z)
-end
-
-# Rotation gates with caching
-function rx_gate(theta::Real)
+function rx_matrix(theta::Real)
     theta_f64 = Float64(theta)
     if haskey(RX_CACHE, theta_f64)
         return RX_CACHE[theta_f64]
     end
-    c = ComplexF64(cos(theta_f64/2))
-    s = ComplexF64(sin(theta_f64/2))
-    gate = c*I2 - im_F64*s*X
+    c = cos(theta_f64/2)
+    s = sin(theta_f64/2)
+    gate = ComplexF64[c -im*s; -im*s c]
     RX_CACHE[theta_f64] = gate
     return gate
 end
 
-function ry_gate(theta::Real)
+function ry_matrix(theta::Real)
     theta_f64 = Float64(theta)
     if haskey(RY_CACHE, theta_f64)
         return RY_CACHE[theta_f64]
     end
-    c = ComplexF64(cos(theta_f64/2))
-    s = ComplexF64(sin(theta_f64/2))
-    gate = c*I2 - im_F64*s*Y
+    c = cos(theta_f64/2)
+    s = sin(theta_f64/2)
+    gate = ComplexF64[c -s; s c]
     RY_CACHE[theta_f64] = gate
     return gate
 end
 
-function rz_gate(theta::Real)
+function rz_matrix(theta::Real)
     theta_f64 = Float64(theta)
     if haskey(RZ_CACHE, theta_f64)
         return RZ_CACHE[theta_f64]
     end
-    c = ComplexF64(cos(theta_f64/2))
-    s = ComplexF64(sin(theta_f64/2))
-    gate = c*I2 - im_F64*s*Z
+    gate = ComplexF64[exp(-im*theta_f64/2) 0; 0 exp(im*theta_f64/2)]
     RZ_CACHE[theta_f64] = gate
     return gate
 end
 
-function rx!(s::Vector{ComplexF64}, t::Int, theta::Real)
-    u2!(s, t, rx_gate(theta))
-end
+# ====================================================================
+# STATE INITIALIZATION
+# ====================================================================
 
-function rx!(rho::Matrix{ComplexF64}, t::Int, theta::Real)
-    u2!(rho, t, rx_gate(theta))
-end
-
-function ry!(s::Vector{ComplexF64}, t::Int, theta::Real)
-    u2!(s, t, ry_gate(theta))
-end
-
-function ry!(rho::Matrix{ComplexF64}, t::Int, theta::Real)
-    u2!(rho, t, ry_gate(theta))
-end
-
-function rz!(s::Vector{ComplexF64}, t::Int, theta::Real)
-    u2!(s, t, rz_gate(theta))
-end
-
-function rz!(rho::Matrix{ComplexF64}, t::Int, theta::Real)
-    u2!(rho, t, rz_gate(theta))
-end
-
-# Controlled gates
-function controlled!(s::Vector{ComplexF64}, c::Int, t::Int, V::Matrix{ComplexF64})
-    q = nb(s)
-    c <= q && t <= q || error("Qubit index out of range")
-    c == t && error("Control and target cannot be the same qubit")
+function create_quantum_simulator(n_qubits::Int;
+                                  graph::SimpleGraph=path_graph(n_qubits),
+                                  backend::Symbol=:auto,
+                                  initial_state::String="zero")
     
-    # Identify lower and higher indices
-    a = min(c, t)
-    b = max(c, t)
-
-    # Build identity operators for regions outside control/target pair
-    left = id(q - b)             
-    right = id(a - 1)            
-    mid = (b - a - 1) > 0 ? id(b - a - 1) : Matrix{ComplexF64}([c1;;]) 
-
-    # Construct two-qubit controlled operator
-    U2 = if c < t
-        kron(id(1), P0) + kron(V, P1)
+    # Automatic backend selection (simplified)
+    if backend == :auto
+        backend = n_qubits <= 15 ? :statevector : :tensornetwork
+    end
+    
+    if backend == :statevector
+        dim = 1 << n_qubits
+        if initial_state == "zero"
+            sv = zeros(ComplexF64, dim)
+            sv[1] = 1.0
+        elseif initial_state == "plus"
+            sv = ones(ComplexF64, dim) / sqrt(dim)
+        else
+            throw(ArgumentError("initial_state must be 'zero' or 'plus'"))
+        end
+        return StateVectorRep(sv, n_qubits)
+        
+    elseif backend == :tensornetwork
+        # Original-style: dense vector with ITensor indices
+        sites = [Index(2, "Site,n=$i") for i in 1:n_qubits]
+        dim = 1 << n_qubits
+        
+        if initial_state == "zero"
+            sv = zeros(ComplexF64, dim)
+            sv[1] = 1.0
+        elseif initial_state == "plus"
+            sv = ones(ComplexF64, dim) / sqrt(dim)
+        else
+            throw(ArgumentError("initial_state must be 'zero' or 'plus'"))
+        end
+        
+        return TensorNetworkRep(sv, sites, graph, n_qubits)
     else
-        kron(P0, id(1)) + kron(P1, V)
+        throw(ArgumentError("backend must be :statevector, :tensornetwork, or :auto"))
     end
-
-    # Apply full operator efficiently
-    op = kron(left, kron(U2, kron(mid, right)))
-    temp = similar(s)
-    mul!(temp, op, s)
-    copyto!(s, temp)
-    
-    return s
 end
 
-function cnot!(s::Vector{ComplexF64}, c::Int, t::Int)
-    controlled!(s, c, t, X)
+function QuantumCircuit(n_qubits::Int; 
+                        graph::SimpleGraph=path_graph(n_qubits), 
+                        backend::Symbol=:auto,
+                        initial_state::String="zero")
+    # Determine actual backend for storage
+    actual_backend = backend == :auto ? (n_qubits <= 15 ? :statevector : :tensornetwork) : backend
+    state = create_quantum_simulator(n_qubits, graph=graph, backend=backend, initial_state=initial_state)
+    QuantumCircuit(n_qubits, state, Vector{Dict{Symbol,Any}}(), graph, actual_backend)
 end
 
-function controlled!(rho::Matrix{ComplexF64}, c::Int, t::Int, V::Matrix{ComplexF64})
-    q = round(Int, log2(size(rho, 1)))
-    c <= q && t <= q || error("Qubit index out of range")
-    c == t && error("Control and target cannot be the same qubit")
-    
-    a = min(c, t)
-    b = max(c, t)
-    left = id(q - b)
-    right = id(a - 1)
-    mid = (b - a - 1) > 0 ? id(b - a - 1) : reshape([c1], 1, 1)
-    
-    U2 = if c < t
-        kron(id(1), P0) + kron(V, P1)
-    else
-        kron(P0, id(1)) + kron(P1, V)
+# ====================================================================
+# OPTIMIZED STATE VECTOR OPERATIONS
+# ====================================================================
+
+function kronN(n::Int, op::Matrix{ComplexF64}, target::Int)
+    """Apply single-qubit gate to target position in n-qubit system"""
+    factors = Vector{Matrix{ComplexF64}}(undef, n)
+    for i in 1:n
+        factors[i] = (i == target) ? op : I2
     end
-    
-    op = kron(left, kron(U2, kron(mid, right)))
-    temp = similar(rho)
-    mul!(temp, op, rho)
-    mul!(rho, temp, op')
-    
-    rho
+    return reduce(kron, factors)
 end
 
-function cnot!(rho::Matrix{ComplexF64}, c::Int, t::Int)
-    controlled!(rho, c, t, X)
-end
-
-function crx!(s::Vector{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(s, c, t, rx_gate(theta))
-end
-
-function crx!(rho::Matrix{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(rho, c, t, rx_gate(theta))
-end
-
-function cry!(s::Vector{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(s, c, t, ry_gate(theta))
-end
-
-function cry!(rho::Matrix{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(rho, c, t, ry_gate(theta))
-end
-
-function crz!(s::Vector{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(s, c, t, rz_gate(theta))
-end
-
-function crz!(rho::Matrix{ComplexF64}, c::Int, t::Int, theta::Real)
-    controlled!(rho, c, t, rz_gate(theta))
-end
-
-function swap!(s::Vector{ComplexF64}, q1::Int, q2::Int)
-    q = nb(s)
-    q1 <= q && q2 <= q || error("Qubit index out of range")
+function apply_single_gate_inplace!(state_vec::Vector{ComplexF64}, gate_matrix::Matrix{ComplexF64}, 
+                                   target::Int, n_qubits::Int)
+    """Apply single-qubit gate efficiently in-place using bit manipulation"""
+    mask = 1 << (target - 1)
+    step = 1 << target
     
-    if q1 == q2
-        return s
-    end
-    
-    cnot!(s, q1, q2)
-    cnot!(s, q2, q1)
-    cnot!(s, q1, q2)
-    
-    s
-end
-
-function swap!(rho::Matrix{ComplexF64}, q1::Int, q2::Int)
-    q = round(Int, log2(size(rho, 1)))
-    q1 <= q && q2 <= q || error("Qubit index out of range")
-    
-    if q1 == q2
-        return rho
-    end
-    
-    cnot!(rho, q1, q2)
-    cnot!(rho, q2, q1)
-    cnot!(rho, q1, q2)
-    
-    rho
-end
-
-# Measurement probability functions
-mp(s::Vector{ComplexF64}) = abs2.(s)
-
-mp(rho::Matrix{ComplexF64}) = real.(diag(rho))
-
-function measure_z(s::Vector{ComplexF64}, t::Int)
-    n = nb(s)
-    t <= n || error("Qubit index out of range")
-    
-    probs = mp(s)
-    p0 = 0.0
-    p1 = 0.0
-    t_mask = 1 << (t-1)  # Precomputed bit mask
-    
-    for i in 0:(length(probs)-1)
-        prob = probs[i+1]
-        if prob > 1e-10
-            if (i & t_mask) == 0
-                p0 += prob
-            else
-                p1 += prob
+    @inbounds for i in 0:step:(length(state_vec)-1)
+        for j in i:(i + mask - 1)
+            j0 = j + 1
+            j1 = j + mask + 1
+            
+            if j1 <= length(state_vec)
+                amp0 = state_vec[j0]
+                amp1 = state_vec[j1]
+                
+                state_vec[j0] = gate_matrix[1,1] * amp0 + gate_matrix[1,2] * amp1
+                state_vec[j1] = gate_matrix[2,1] * amp0 + gate_matrix[2,2] * amp1
             end
         end
     end
-    
-    return (p0, p1)
 end
 
-function measure_x(s::Vector{ComplexF64}, t::Int)
-    s_copy = copy(s)
-    h!(s_copy, t)
-    return measure_z(s_copy, t)
-end
-
-function measure_y(s::Vector{ComplexF64}, t::Int)
-    s_copy = copy(s)
-    rx!(s_copy, t, π/2)
-    return measure_z(s_copy, t)
-end
-
-function measure_z(rho::Matrix{ComplexF64}, t::Int)
-    q = round(Int, log2(size(rho, 1)))
-    t <= q || error("Qubit index out of range")
+function apply_cnot_inplace!(state_vec::Vector{ComplexF64}, control::Int, target::Int, n_qubits::Int)
+    """Apply CNOT gate efficiently in-place using XOR operations"""
+    ctrl_mask = 1 << (control - 1)
+    targ_mask = 1 << (target - 1)
     
-    probs = real.(diag(rho))
-    p0 = 0.0
-    p1 = 0.0
-    t_mask = 1 << (t - 1)
-    
-    for i in 0:(length(probs) - 1)
-        if probs[i + 1] > 1e-10
-            if (i & t_mask) == 0
-                p0 += probs[i + 1]
-            else
-                p1 += probs[i + 1]
+    @inbounds for i in 0:(length(state_vec)-1)
+        if (i & ctrl_mask) != 0
+            j = xor(i, targ_mask)
+            if j > i
+                state_vec[i+1], state_vec[j+1] = state_vec[j+1], state_vec[i+1]
             end
         end
     end
+end
+
+function apply_controlled_gate_inplace!(state_vec::Vector{ComplexF64}, gate_matrix::Matrix{ComplexF64},
+                                       control::Int, target::Int, n_qubits::Int)
+    """Apply controlled single-qubit gate efficiently"""
+    ctrl_mask = 1 << (control - 1)
+    targ_mask = 1 << (target - 1)
+    step = 1 << target
     
+    @inbounds for i in 0:(length(state_vec)-1)
+        if (i & ctrl_mask) != 0  # Control is |1⟩
+            # Apply gate to target
+            target_bit = (i & targ_mask) >> (target - 1)
+            if target_bit == 0
+                j = i | targ_mask  # Set target to |1⟩
+                if j < length(state_vec)
+                    amp0 = state_vec[i+1]
+                    amp1 = state_vec[j+1]
+                    
+                    state_vec[i+1] = gate_matrix[1,1] * amp0 + gate_matrix[1,2] * amp1
+                    state_vec[j+1] = gate_matrix[2,1] * amp0 + gate_matrix[2,2] * amp1
+                end
+            end
+        end
+    end
+end
+
+function apply_cp_statevector!(state::StateVectorRep, control::Int, target::Int, angle::Float64)
+    """Apply controlled phase gate to statevector representation"""
+    n = state.n_qubits
+    control_mask = 1 << (control - 1)
+    target_mask = 1 << (target - 1)
+    
+    # Apply phase only when both control and target qubits are |1⟩
+    for i in 0:(2^n - 1)
+        if ((i & control_mask) != 0) && ((i & target_mask) != 0)
+            state.data[i+1] *= exp(im * angle)
+        end
+    end
+    
+    return state
+end
+
+function apply_cz_statevector!(state::StateVectorRep, control::Int, target::Int)
+    """Apply controlled-Z gate to statevector representation"""
+    n = state.n_qubits
+    control_mask = 1 << (control - 1)
+    target_mask = 1 << (target - 1)
+    
+    # Apply -1 phase when both qubits are |1⟩
+    for i in 0:(2^n - 1)
+        if ((i & control_mask) != 0) && ((i & target_mask) != 0)
+            state.data[i+1] *= -1
+        end
+    end
+    
+    return state
+end
+
+# ====================================================================
+# TENSOR NETWORK OPERATIONS (ORIGINAL STYLE)
+# ====================================================================
+
+function apply_hadamard_tensor!(sim::TensorNetworkRep, qubit::Int)
+    """Apply Hadamard gate using original tensor network approach"""
+    if qubit < 1 || qubit > sim.n_qubits
+        throw(ArgumentError("Qubit index $qubit out of range [1, $(sim.n_qubits)]"))
+    end
+    
+    new_state = zeros(ComplexF64, length(sim.state_vector))
+    inv_sqrt2 = 1.0 / sqrt(2)
+    
+    @inbounds for i in 0:(2^sim.n_qubits - 1)
+        bit_string = digits(i, base=2, pad=sim.n_qubits)
+        
+        bit_string_0 = copy(bit_string)
+        bit_string_1 = copy(bit_string)
+        bit_string_0[qubit] = 0
+        bit_string_1[qubit] = 1
+        
+        idx_0 = sum(bit_string_0 .* (2 .^ (0:(sim.n_qubits-1)))) + 1
+        idx_1 = sum(bit_string_1 .* (2 .^ (0:(sim.n_qubits-1)))) + 1
+        
+        if bit_string[qubit] == 0
+            new_state[idx_0] += sim.state_vector[i+1] * inv_sqrt2
+            new_state[idx_1] += sim.state_vector[i+1] * inv_sqrt2
+        else
+            new_state[idx_0] += sim.state_vector[i+1] * inv_sqrt2
+            new_state[idx_1] -= sim.state_vector[i+1] * inv_sqrt2
+        end
+    end
+    
+    sim.state_vector = new_state
+    return sim
+end
+
+function apply_single_gate_tensor!(sim::TensorNetworkRep, gate_matrix::Matrix{ComplexF64}, qubit::Int)
+    """Apply arbitrary single-qubit gate using tensor network approach"""
+    if qubit < 1 || qubit > sim.n_qubits
+        throw(ArgumentError("Qubit index $qubit out of range [1, $(sim.n_qubits)]"))
+    end
+    
+    new_state = zeros(ComplexF64, length(sim.state_vector))
+    
+    @inbounds for i in 0:(2^sim.n_qubits - 1)
+        bit_string = digits(i, base=2, pad=sim.n_qubits)
+        
+        bit_string_0 = copy(bit_string)
+        bit_string_1 = copy(bit_string)
+        bit_string_0[qubit] = 0
+        bit_string_1[qubit] = 1
+        
+        idx_0 = sum(bit_string_0 .* (2 .^ (0:(sim.n_qubits-1)))) + 1
+        idx_1 = sum(bit_string_1 .* (2 .^ (0:(sim.n_qubits-1)))) + 1
+        
+        if bit_string[qubit] == 0
+            new_state[idx_0] += gate_matrix[1,1] * sim.state_vector[i+1]
+            new_state[idx_1] += gate_matrix[2,1] * sim.state_vector[i+1]
+        else
+            new_state[idx_0] += gate_matrix[1,2] * sim.state_vector[i+1]
+            new_state[idx_1] += gate_matrix[2,2] * sim.state_vector[i+1]
+        end
+    end
+    
+    sim.state_vector = new_state
+    return sim
+end
+
+function apply_cnot_tensor!(sim::TensorNetworkRep, control::Int, target::Int)
+    """Apply CNOT gate using tensor network approach"""
+    new_state = zeros(ComplexF64, length(sim.state_vector))
+    
+    @inbounds for i in 0:(2^sim.n_qubits - 1)
+        bit_string = digits(i, base=2, pad=sim.n_qubits)
+        output_bit_string = copy(bit_string)
+        
+        if bit_string[control] == 1
+            output_bit_string[target] = 1 - bit_string[target]
+        end
+        
+        output_idx = sum(output_bit_string .* (2 .^ (0:(sim.n_qubits-1)))) + 1
+        new_state[output_idx] += sim.state_vector[i+1]
+    end
+    
+    sim.state_vector = new_state
+    return sim
+end
+
+function apply_cp_tensor!(state, control, target, angle)
+    """Apply controlled phase gate using tensor network approach"""
+    # Get dimensions
+    dims = size(state.tensor)
+    
+    # Apply controlled phase operation
+    for idx in CartesianIndices(dims)
+        indices = Tuple(idx)
+        # If control and target qubits are both 1 (indices start at 1, so 2 means |1⟩)
+        if indices[control] == 2 && indices[target] == 2
+            # Apply phase
+            state.tensor[idx] *= exp(im * angle)
+        end
+    end
+    
+    return state
+end
+
+# ====================================================================
+# UNIFIED GATE APPLICATION INTERFACE
+# ====================================================================
+
+function add_gate!(circuit::QuantumCircuit, gate_type::Symbol; 
+                   targets::Vector{Int}, controls::Vector{Int}=Int[], 
+                   params::Vector{<:Real}=Real[])
+    # Validate inputs
+    all(t -> 1 <= t <= circuit.n_qubits, targets) || error("Target qubits out of range")
+    all(c -> 1 <= c <= circuit.n_qubits, controls) || error("Control qubits out of range")
+    
+    gate_dict = Dict(
+        :gate => gate_type,
+        :targets => targets,
+        :controls => controls,
+        :params => params
+    )
+    push!(circuit.gates, gate_dict)
+    return circuit
+end
+
+function apply_gate!(state::StateVectorRep, gate::Dict{Symbol,Any})
+    n = state.n_qubits
+    gtype = gate[:gate]
+    targets = gate[:targets]
+    controls = gate[:controls]
+    params = gate[:params]
+
+    if gtype == :h
+        apply_single_gate_inplace!(state.data, H, targets[1], n)
+    elseif gtype == :x
+        apply_single_gate_inplace!(state.data, X, targets[1], n)
+    elseif gtype == :y
+        apply_single_gate_inplace!(state.data, Y, targets[1], n)
+    elseif gtype == :z
+        apply_single_gate_inplace!(state.data, Z, targets[1], n)
+    elseif gtype == :s
+        apply_single_gate_inplace!(state.data, S, targets[1], n)
+    elseif gtype == :t
+        apply_single_gate_inplace!(state.data, T, targets[1], n)
+    elseif gtype == :rx
+        apply_single_gate_inplace!(state.data, rx_matrix(params[1]), targets[1], n)
+    elseif gtype == :ry
+        apply_single_gate_inplace!(state.data, ry_matrix(params[1]), targets[1], n)
+    elseif gtype == :rz
+        apply_single_gate_inplace!(state.data, rz_matrix(params[1]), targets[1], n)
+    elseif gtype == :cnot
+        apply_cnot_inplace!(state.data, controls[1], targets[1], n)
+    elseif gtype == :cp
+        control = controls[1]
+        target = targets[1]
+        angle = params[1]
+        apply_cp_statevector!(state, control, target, angle)
+    
+    elseif gtype == :cz
+        control = controls[1]
+        target = targets[1]
+        apply_cz_statevector!(state, control, target)
+    elseif gtype == :swap
+        t1, t2 = targets[1], targets[2]
+        apply_cnot_inplace!(state.data, t1, t2, n)
+        apply_cnot_inplace!(state.data, t2, t1, n)
+        apply_cnot_inplace!(state.data, t1, t2, n)
+    else
+        error("Unsupported gate: $gtype")
+    end
+    return state
+end
+
+function apply_cp_tensor!(sim::TensorNetworkRep, control::Int, target::Int, angle::Real)
+    """Apply controlled phase gate using tensor network approach"""
+    new_state = copy(sim.state_vector)
+    
+    @inbounds for i in 0:(2^sim.n_qubits - 1)
+        bit_string = digits(i, base=2, pad=sim.n_qubits)
+        
+        # If both control and target qubits are 1, apply phase
+        if bit_string[control] == 1 && bit_string[target] == 1
+            new_state[i+1] *= exp(im * angle)
+        end
+    end
+    
+    sim.state_vector = new_state
+    return sim
+end
+
+function apply_gate!(state::TensorNetworkRep, gate::Dict{Symbol,Any})
+    gtype = gate[:gate]
+    targets = gate[:targets]
+    controls = gate[:controls]
+    params = gate[:params]
+
+    if gtype == :h
+        apply_hadamard_tensor!(state, targets[1])
+    elseif gtype == :x
+        apply_single_gate_tensor!(state, X, targets[1])
+    elseif gtype == :y
+        apply_single_gate_tensor!(state, Y, targets[1])
+    elseif gtype == :z
+        apply_single_gate_tensor!(state, Z, targets[1])
+    elseif gtype == :s
+        apply_single_gate_tensor!(state, S, targets[1])
+    elseif gtype == :t
+        apply_single_gate_tensor!(state, T, targets[1])
+    elseif gtype == :rx
+        apply_single_gate_tensor!(state, rx_matrix(params[1]), targets[1])
+    elseif gtype == :ry
+        apply_single_gate_tensor!(state, ry_matrix(params[1]), targets[1])
+    elseif gtype == :rz
+        apply_single_gate_tensor!(state, rz_matrix(params[1]), targets[1])
+    elseif gtype == :cnot
+        apply_cnot_tensor!(state, controls[1], targets[1])
+    elseif gtype == :cp
+        control = controls[1]
+        target = targets[1]
+        angle = params[1]
+        apply_cp_tensor!(state, control, target, angle)
+    
+
+    elseif gtype == :swap
+        # Implement SWAP as three CNOTs
+        t1, t2 = targets[1], targets[2]
+        apply_cnot_tensor!(state, t1, t2)
+        apply_cnot_tensor!(state, t2, t1)
+        apply_cnot_tensor!(state, t1, t2)
+    else
+        error("Unsupported tensor network gate: $gtype")
+    end
+    return state
+end
+
+# ====================================================================
+# CIRCUIT EXECUTION
+# ====================================================================
+
+function run_circuit(circuit::QuantumCircuit)
+    """Execute all gates in the circuit"""
+    for gate in circuit.gates
+        apply_gate!(circuit.state, gate)
+    end
+    return circuit.state
+end
+
+function run_circuit!(circuit::QuantumCircuit)
+    """Execute all gates in the circuit (in-place version)"""
+    run_circuit(circuit)
+    return circuit
+end
+
+# ====================================================================
+# UNITARY COMPUTATION
+# ====================================================================
+
+function compute_unitary(circuit::QuantumCircuit)
+    """Compute the full unitary matrix of the circuit"""
+    n = circuit.n_qubits
+    if n > 15
+        @warn "Computing unitary for $n qubits requires $(2^(2*n)) complex numbers ($(2^(2*n)*16) bytes)"
+    end
+    
+    U = Matrix{ComplexF64}(I, 1<<n, 1<<n)
+    
+    for gate in circuit.gates
+        gate_matrix = get_gate_unitary(gate, n)
+        U = gate_matrix * U
+    end
+    return U
+end
+
+function get_gate_unitary(gate::Dict{Symbol,Any}, n_qubits::Int)
+    """Get the full unitary matrix for a gate"""
+    gtype = gate[:gate]
+    targets = gate[:targets]
+    controls = gate[:controls]
+    params = gate[:params]
+    
+    if gtype == :h
+        return kronN(n_qubits, H, targets[1])
+    elseif gtype == :x
+        return kronN(n_qubits, X, targets[1])
+    elseif gtype == :y
+        return kronN(n_qubits, Y, targets[1])
+    elseif gtype == :z
+        return kronN(n_qubits, Z, targets[1])
+    elseif gtype == :s
+        return kronN(n_qubits, S, targets[1])
+    elseif gtype == :t
+        return kronN(n_qubits, T, targets[1])
+    elseif gtype == :rx
+        return kronN(n_qubits, rx_matrix(params[1]), targets[1])
+    elseif gtype == :ry
+        return kronN(n_qubits, ry_matrix(params[1]), targets[1])
+    elseif gtype == :rz
+        return kronN(n_qubits, rz_matrix(params[1]), targets[1])
+    elseif gtype == :cnot
+        return build_controlled_gate(X, controls[1], targets[1], n_qubits)
+    elseif gtype == :cz
+        return build_controlled_gate(Z, controls[1], targets[1], n_qubits)
+    elseif gtype == :swap
+        return build_swap_unitary(targets[1], targets[2], n_qubits)
+    elseif gate[:gate] == :cp
+        control = gate[:controls][1]
+        target = gate[:targets][1]
+        angle = gate[:params][1]
+        return build_cp_unitary(control, target, n_qubits, angle)
+    else
+        error("Unsupported gate for unitary: $gtype")
+    end
+end
+
+function build_controlled_gate(gate::Matrix{ComplexF64}, control::Int, target::Int, n_qubits::Int)
+    """Build controlled gate matrix efficiently"""
+    dim = 1 << n_qubits
+    result = zeros(ComplexF64, dim, dim)
+    
+    @inbounds for i in 0:(dim-1)
+        bits = digits(i, base=2, pad=n_qubits)
+        
+        if bits[control] == 0
+            result[i+1, i+1] = 1.0
+        else
+            output_bits = copy(bits)
+            if gate == X
+                output_bits[target] = 1 - output_bits[target]
+            elseif gate == Z && bits[target] == 1
+                result[i+1, i+1] = -1.0
+                continue
+            end
+            
+            j = sum(output_bits .* (2 .^ (0:n_qubits-1)))
+            if gate == X
+                result[j+1, i+1] = 1.0
+            else
+                result[i+1, i+1] = 1.0
+            end
+        end
+    end
+    return result
+end
+
+function build_cp_unitary(control::Int, target::Int, n_qubits::Int, angle::Float64)
+    """Build controlled phase gate unitary matrix
+    
+    Args:
+        control: control qubit index
+        target: target qubit index
+        n_qubits: total number of qubits
+        angle: rotation angle in radians
+    
+    Returns:
+        ComplexF64 matrix for the controlled phase gate
+    """
+    dim = 1 << n_qubits
+    result = Matrix{ComplexF64}(I, dim, dim)
+    
+    # Apply phase only when both control and target qubits are 1
+    @inbounds for i in 0:(dim-1)
+        bits = digits(i, base=2, pad=n_qubits)
+        # If both control and target are 1
+        if bits[control] == 1 && bits[target] == 1
+            # Apply phase
+            result[i+1, i+1] = exp(im * angle)
+        end
+    end
+    
+    return result
+end
+
+function build_swap_unitary(q1::Int, q2::Int, n_qubits::Int)
+    """Build SWAP gate unitary"""
+    dim = 1 << n_qubits
+    result = zeros(ComplexF64, dim, dim)
+    
+    @inbounds for i in 0:(dim-1)
+        bits = digits(i, base=2, pad=n_qubits)
+        output_bits = copy(bits)
+        output_bits[q1], output_bits[q2] = bits[q2], bits[q1]
+        j = sum(output_bits .* (2 .^ (0:n_qubits-1)))
+        result[j+1, i+1] = 1.0
+    end
+    return result
+end
+
+# ====================================================================
+# MEASUREMENT AND ANALYSIS
+# ====================================================================
+
+function get_measurement_probabilities(state::StateVectorRep)
+    return abs2.(state.data)
+end
+
+function get_measurement_probabilities(state::TensorNetworkRep)
+    return abs2.(state.state_vector)
+end
+
+function measure_z(state::AbstractQuantumState, target::Int)
+    """Measure single qubit in Z basis"""
+    if isa(state, StateVectorRep)
+        data = state.data
+    else  # TensorNetworkRep
+        data = state.state_vector
+    end
+    
+    n = state.n_qubits
+    probs = abs2.(data)
+    p0 = 0.0
+    p1 = 0.0
+    
+    mask = 1 << (target - 1)
+    @inbounds for i in 0:(length(probs)-1)
+        if (i & mask) == 0
+            p0 += probs[i+1]
+        else
+            p1 += probs[i+1]
+        end
+    end
     return (p0, p1)
 end
 
-function measure_x(rho::Matrix{ComplexF64}, t::Int)
-    rho_copy = copy(rho)
-    h!(rho_copy, t)
-    return measure_z(rho_copy, t)
+function measure_x(state::AbstractQuantumState, target::Int)
+    """Measure single qubit in X basis"""
+    if isa(state, StateVectorRep)
+        state_copy = StateVectorRep(copy(state.data), state.n_qubits)
+        apply_single_gate_inplace!(state_copy.data, H, target, state.n_qubits)
+    else  # TensorNetworkRep
+        state_copy = TensorNetworkRep(copy(state.state_vector), state.sites, state.graph, state.n_qubits)
+        apply_hadamard_tensor!(state_copy, target)
+    end
+    return measure_z(state_copy, target)
 end
 
-function measure_y(rho::Matrix{ComplexF64}, t::Int)
-    rho_copy = copy(rho)
-    rx!(rho_copy, t, π / 2)
-    return measure_z(rho_copy, t)
+function measure_y(state::AbstractQuantumState, target::Int)
+    """Measure single qubit in Y basis"""
+    s_dag = ComplexF64[1 0; 0 -im]
+    
+    if isa(state, StateVectorRep)
+        state_copy = StateVectorRep(copy(state.data), state.n_qubits)
+        apply_single_gate_inplace!(state_copy.data, s_dag, target, state.n_qubits)
+        apply_single_gate_inplace!(state_copy.data, H, target, state.n_qubits)
+    else  # TensorNetworkRep
+        state_copy = TensorNetworkRep(copy(state.state_vector), state.sites, state.graph, state.n_qubits)
+        apply_single_gate_tensor!(state_copy, s_dag, target)
+        apply_hadamard_tensor!(state_copy, target)
+    end
+    return measure_z(state_copy, target)
 end
 
+function print_state_probabilities(state::AbstractQuantumState; threshold::Real=1e-6)
+    """Print non-zero measurement probabilities"""
+    n = state.n_qubits
+    probs = get_measurement_probabilities(state)
+    
+    println("=== Measurement Probabilities ===")
+    total_shown = 0.0
+    
+    for (i, p) in enumerate(probs)
+        if p > threshold
+            bits = digits(i-1, base=2, pad=n)
+            basis_state = join(reverse(bits))
+            println("|$basis_state⟩: $(round(p, digits=6))")
+            total_shown += p
+        end
+    end
+    
+    println("Total probability shown: $(round(total_shown, digits=6))")
+    println("===============================")
+end
 
-function prstate(s::Vector{ComplexF64})
-    n = nb(s)
-    for i in 0:(length(s)-1)
-        a = s[i+1]
-        abs(a) > 1e-10 && println("|", lpad(string(i, base=2), n, '0'), "⟩: ", a)
+function display_state(state::AbstractQuantumState)
+    """Enhanced state display function"""
+    if isa(state, StateVectorRep)
+        println("State Vector Backend ($(state.n_qubits) qubits):")
+        print_state_probabilities(state)
+    elseif isa(state, TensorNetworkRep)
+        println("Tensor Network Backend ($(state.n_qubits) qubits):")
+        println("ITensor sites: $(length(state.sites))")
+        print_state_probabilities(state)
     end
 end
 
-function prstate(x::Matrix{ComplexF64})
-    q = round(Int, log2(size(x, 1)))
-    probs = mp(x)
-    for i in 0:(size(x, 1) - 1)
-        p = probs[i + 1]
-        abs(p) > 1e-10 && println("|", lpad(string(i, base=2), q, '0'), "⟩ : ", p)
+# ====================================================================
+# CIRCUIT ANALYSIS UTILITIES
+# ====================================================================
+
+function circuit_gate_count(circuit::QuantumCircuit)
+    """Count gates by type"""
+    counts = Dict{Symbol, Int}()
+    for gate in circuit.gates
+        gtype = gate[:gate]
+        counts[gtype] = get(counts, gtype, 0) + 1
     end
-    nothing
+    return counts
 end
 
-end 
+function total_gate_count(circuit::QuantumCircuit)
+    """Total number of gates in circuit"""
+    return length(circuit.gates)
+end
+
+function circuit_depth(circuit::QuantumCircuit)
+    """Calculate true circuit depth considering gate parallelization"""
+    if isempty(circuit.gates)
+        return 0
+    end
+    
+    n_qubits = circuit.n_qubits
+    qubit_times = zeros(Int, n_qubits)
+    
+    for gate in circuit.gates
+        involved_qubits = union(gate[:targets], gate[:controls])
+        start_time = maximum(qubit_times[involved_qubits])
+        
+        for qubit in involved_qubits
+            qubit_times[qubit] = start_time + 1
+        end
+    end
+    
+    return maximum(qubit_times)
+end
+
+function circuit_width(circuit::QuantumCircuit)
+    """Number of qubits used in the circuit"""
+    used_qubits = Set{Int}()
+    for gate in circuit.gates
+        union!(used_qubits, gate[:targets])
+        union!(used_qubits, gate[:controls])
+    end
+    return length(used_qubits)
+end
+
+function two_qubit_gate_count(circuit::QuantumCircuit)
+    """Count two-qubit gates"""
+    two_qubit_gates = [:cnot, :swap, :cz, :cy, :crx, :cry, :crz]
+    count = 0
+    for gate in circuit.gates
+        if gate[:gate] in two_qubit_gates
+            count += 1
+        end
+    end
+    return count
+end
+
+function single_qubit_gate_count(circuit::QuantumCircuit)
+    """Count single-qubit gates"""
+    single_qubit_gates = [:h, :x, :y, :z, :rx, :ry, :rz, :s, :t]
+    count = 0
+    for gate in circuit.gates
+        if gate[:gate] in single_qubit_gates
+            count += 1
+        end
+    end
+    return count
+end
+
+function circuit_layers(circuit::QuantumCircuit)
+    """Group gates into parallel executable layers"""
+    if isempty(circuit.gates)
+        return Vector{Vector{Int}}()
+    end
+    
+    layers = Vector{Vector{Int}}()
+    gate_scheduled = fill(false, length(circuit.gates))
+    
+    while !all(gate_scheduled)
+        current_layer = Int[]
+        used_qubits = Set{Int}()
+        
+        for (i, gate) in enumerate(circuit.gates)
+            if gate_scheduled[i]
+                continue
+            end
+            
+            involved_qubits = union(gate[:targets], gate[:controls])
+            
+            if isempty(intersect(involved_qubits, used_qubits))
+                push!(current_layer, i)
+                union!(used_qubits, involved_qubits)
+                gate_scheduled[i] = true
+            end
+        end
+        
+        push!(layers, current_layer)
+    end
+    
+    return layers
+end
+
+function print_circuit_summary(circuit::QuantumCircuit)
+    """Print comprehensive circuit analysis"""
+    println("=" ^ 50)
+    println("QUANTUM CIRCUIT SUMMARY")
+    println("=" ^ 50)
+    
+    println("📊 Basic Metrics:")
+    println("  • Backend: $(circuit.backend)")
+    println("  • Total qubits: $(circuit.n_qubits)")
+    println("  • Active qubits: $(circuit_width(circuit))")
+    println("  • Total gates: $(total_gate_count(circuit))")
+    println("  • Circuit depth: $(circuit_depth(circuit))")
+    println("  • Number of layers: $(length(circuit_layers(circuit)))")
+    
+    println("\n🚪 Gate Breakdown:")
+    gate_counts = circuit_gate_count(circuit)
+    for (gate_type, count) in sort(collect(gate_counts))
+        println("  • $gate_type: $count")
+    end
+    
+    two_q_count = two_qubit_gate_count(circuit)
+    one_q_count = single_qubit_gate_count(circuit)
+    println("\n🔗 Gate Categories:")
+    println("  • Single-qubit gates: $one_q_count")
+    println("  • Two-qubit gates: $two_q_count")
+    
+    println("\n🌐 Connectivity:")
+    println("  • Graph vertices: $(nv(circuit.graph))")
+    println("  • Graph edges: $(ne(circuit.graph))")
+    
+    if circuit.n_qubits <= 20
+        state_size = 2^circuit.n_qubits * 16
+        unitary_size = 2^(2*circuit.n_qubits) * 16
+        println("\n💾 Memory Requirements:")
+        println("  • State vector: $(format_bytes(state_size))")
+        println("  • Full unitary: $(format_bytes(unitary_size))")
+    else
+        println("\n⚠️  Large system: Memory usage may be significant")
+    end
+    
+    println("=" ^ 50)
+end
+
+function format_bytes(bytes::Int)
+    """Format byte count in human-readable format"""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(bytes)
+    unit_idx = 1
+    
+    while size >= 1024 && unit_idx < length(units)
+        size /= 1024
+        unit_idx += 1
+    end
+    
+    return "$(round(size, digits=2)) $(units[unit_idx])"
+end
+
+function circuit_parallelism(circuit::QuantumCircuit)
+    """Calculate average parallelism (gates per layer)"""
+    layers = circuit_layers(circuit)
+    if isempty(layers)
+        return 0.0
+    end
+    
+    total_gates = sum(length(layer) for layer in layers)
+    return total_gates / length(layers)
+end
+
+function critical_path_analysis(circuit::QuantumCircuit)
+    """Analyze critical path for each qubit"""
+    n_qubits = circuit.n_qubits
+    qubit_gate_counts = zeros(Int, n_qubits)
+    
+    for gate in circuit.gates
+        involved_qubits = union(gate[:targets], gate[:controls])
+        for qubit in involved_qubits
+            qubit_gate_counts[qubit] += 1
+        end
+    end
+    
+    return Dict(
+        :max_qubit_gates => maximum(qubit_gate_counts),
+        :min_qubit_gates => minimum(qubit_gate_counts),
+        :avg_qubit_gates => mean(qubit_gate_counts),
+        :qubit_gate_counts => qubit_gate_counts
+    )
+end
+
+function estimate_execution_time(circuit::QuantumCircuit; 
+                                gate_times::Dict{Symbol,Float64}=Dict(
+                                    :h => 20e-9, :x => 20e-9, :y => 20e-9, :z => 0.0,
+                                    :rx => 20e-9, :ry => 20e-9, :rz => 0.0,
+                                    :cnot => 200e-9, :swap => 600e-9, :cz => 200e-9
+                                ))
+    """Estimate circuit execution time on quantum hardware"""
+    layers = circuit_layers(circuit)
+    total_time = 0.0
+    
+    for layer in layers
+        layer_time = 0.0
+        for gate_idx in layer
+            gate = circuit.gates[gate_idx]
+            gate_type = gate[:gate]
+            gate_time = get(gate_times, gate_type, 50e-9)
+            layer_time = max(layer_time, gate_time)
+        end
+        total_time += layer_time
+    end
+    
+    return total_time
+end
+
+# ====================================================================
+# TOPOLOGY UTILITIES
+# ====================================================================
+
+function linear_circuit(n_qubits::Int)
+    """Create linear chain topology"""
+    return path_graph(n_qubits)
+end
+
+function lattice_2d_circuit(rows::Int, cols::Int)
+    """Create 2D grid lattice topology"""
+    return grid([rows, cols])
+end
+
+function all_to_all_circuit(n_qubits::Int)
+    """Create fully connected topology"""
+    return complete_graph(n_qubits)
+end
+
+# ====================================================================
+# CONVENIENCE FUNCTIONS
+# ====================================================================
+
+function create_bell_circuit(; backend::Symbol=:auto)
+    """Create Bell state preparation circuit"""
+    circuit = QuantumCircuit(2, backend=backend)
+    add_gate!(circuit, :h, targets=[1])
+    add_gate!(circuit, :cnot, controls=[1], targets=[2])
+    return circuit
+end
+
+function create_ghz_circuit(n_qubits::Int; backend::Symbol=:auto)
+    """Create GHZ state preparation circuit"""
+    circuit = QuantumCircuit(n_qubits, backend=backend)
+    add_gate!(circuit, :h, targets=[1])
+    for i in 2:n_qubits
+        add_gate!(circuit, :cnot, controls=[1], targets=[i])
+    end
+    return circuit
+end
+
+function create_qft_circuit(n_qubits::Int; backend::Symbol=:auto)
+    """Create Quantum Fourier Transform circuit"""
+    circuit = QuantumCircuit(n_qubits, backend=backend)
+    
+    for i in 1:n_qubits
+        add_gate!(circuit, :h, targets=[i])
+        for j in (i+1):n_qubits
+            angle = π / (2^(j-i))
+            # Approximate controlled rotation with RZ and CNOT
+            add_gate!(circuit, :cnot, controls=[j], targets=[i])
+            add_gate!(circuit, :rz, targets=[i], params=[angle])
+            add_gate!(circuit, :cnot, controls=[j], targets=[i])
+        end
+    end
+    
+    # Reverse qubit order
+    for i in 1:(n_qubits÷2)
+        add_gate!(circuit, :swap, targets=[i, n_qubits-i+1])
+    end
+    
+    return circuit
+end
+
+end # module HybridQSim

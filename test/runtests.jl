@@ -10,4 +10,7 @@ using Test
     @testset "test_QSim.jl" begin
         include("test_QSim.jl")
     end
+    @testset "test_Algorithms.jl" begin
+        include("test_Algorithms.jl")
+    end
 end
