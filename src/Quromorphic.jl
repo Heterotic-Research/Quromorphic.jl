@@ -5,7 +5,7 @@ module Quromorphic
 
 export allo
 
-allo() = "Hello from Heterotic!"
+allo() = "Hello from Quromorphic!"
 include("QSim/QSim.jl")    # loads src/QSim/QSim.jl
 
 using .QSim  

@@ -5,7 +5,7 @@ using Test
     # Write your tests here.
     @testset "allo function" begin
         result = Quromorphic.allo()
-        @test result == "Hello from Heterotic!"
+        @test result == "Hello from Quromorphic!"
     end
     @testset "test_QSim.jl" begin
         include("test_QSim.jl")
