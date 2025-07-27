@@ -1,4 +1,4 @@
-using Heterotic
+using Quromorphic
 using Test
 
 @testset "Heterotic.jl" begin

@@ -1,4 +1,4 @@
-module Heterotic
+module Quromorphic
 
 # Write your package code here.
 
