@@ -1,6 +1,6 @@
 using Test
 
-using Heterotic.QSim
+using Quromorphic.QSim
 using LinearAlgebra
 
 
