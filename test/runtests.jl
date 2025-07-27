@@ -1,10 +1,10 @@
 using Quromorphic
 using Test
 
-@testset "Heterotic.jl" begin
+@testset "Quromorphic.jl" begin
     # Write your tests here.
     @testset "allo function" begin
-        result = Heterotic.allo()
+        result = Quromorphic.allo()
         @test result == "Hello from Heterotic!"
     end
     @testset "test_QSim.jl" begin
