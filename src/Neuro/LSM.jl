@@ -1,6 +1,6 @@
 module LSM
 
-using LinearAlgebra, Random
+using LinearAlgebra, Random ,Statistics
 
 export LSMNet, train_readout!, predict, get_spectral_radius, ablation_spectral_radius, ablation_connectivity, reset!, step!, collect_states
 
@@ -63,7 +63,7 @@ function train_readout!(lsm::LSMNet, inputs::AbstractMatrix, targets::AbstractMa
     XTY = states_aug * targets'
     Waug = XTX \ XTY
     lsm.Wout .= Waug[1:end-1,:]'
-    lsm.bout .= Waug[end,:]'
+    lsm.bout .= Waug[end,:]
 end
 
 function predict(lsm::LSMNet, inputs::AbstractMatrix)
