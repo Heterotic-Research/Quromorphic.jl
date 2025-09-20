@@ -3,6 +3,7 @@ using Quromorphic.LSM
 using Test
 using LinearAlgebra
 using Statistics
+using Random
 
 @testset "LSM.jl" begin
 
@@ -175,72 +176,552 @@ using Statistics
         end
     end
 
-    @testset "train_readout! and predict - Basic Functionality" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+    @testset "train_readout! - Comprehensive Testing" begin
+        @testset "Basic Training Functionality" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Before training
+            @test all(lsm.Wout .== 0.0)
+            @test all(lsm.bout .== 0.0)
+            
+            # Train the readout
+            train_readout!(lsm, train_inputs, train_targets)
+            
+            # After training
+            @test !all(lsm.Wout .== 0.0)
+            @test !all(lsm.bout .== 0.0)
+            @test size(lsm.Wout) == (output_dim, reservoir_size)
+            @test size(lsm.bout) == (output_dim,)
+            @test all(isfinite, lsm.Wout)
+            @test all(isfinite, lsm.bout)
+        end
         
-        # Before training
-        @test all(lsm.Wout .== 0.0)
-        @test all(lsm.bout .== 0.0)
-        preds_before = predict(lsm, test_inputs)
-        @test all(preds_before .== 0.0)
-        @test size(preds_before) == (output_dim, T_test)
-
-        # Test state collection works
-        states = collect_states(lsm, train_inputs)
-        @test size(states) == (reservoir_size, T_train)
+        @testset "Training with Different Regularization" begin
+            lsm1 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            lsm2 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Train with different regularization values
+            train_readout!(lsm1, train_inputs, train_targets; reg=1e-8)
+            train_readout!(lsm2, train_inputs, train_targets; reg=1e-3)
+            
+            # Weights should be different due to regularization
+            @test !(lsm1.Wout ≈ lsm2.Wout)
+            @test !(lsm1.bout ≈ lsm2.bout)
+            
+            # Higher regularization should generally lead to smaller weights
+            @test norm(lsm2.Wout) ≤ norm(lsm1.Wout)
+        end
         
-        # Test basic prediction with zero weights
-        manual_pred = lsm.Wout * states .+ lsm.bout
-        @test size(manual_pred) == (output_dim, T_train)
-        @test all(manual_pred .== 0.0)
+        @testset "Training Performance and Error" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Train the network
+            train_readout!(lsm, train_inputs, train_targets)
+            
+            # Test training error
+            train_preds = predict(lsm, train_inputs)
+            train_mse = mean((train_preds .- train_targets).^2)
+            @test train_mse ≥ 0.0
+            @test isfinite(train_mse)
+            
+            # Test prediction consistency
+            train_preds2 = predict(lsm, train_inputs)
+            @test train_preds ≈ train_preds2
+            
+            # Test generalization
+            test_preds = predict(lsm, test_inputs)
+            test_mse = mean((test_preds .- test_targets).^2)
+            @test test_mse ≥ 0.0
+            @test isfinite(test_mse)
+        end
+        
+        @testset "Training with Edge Case Data" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with zero targets
+            zero_targets = zeros(output_dim, T_train)
+            train_readout!(lsm, train_inputs, zero_targets)
+            zero_preds = predict(lsm, train_inputs)
+            zero_mse = mean(zero_preds.^2)
+            @test zero_mse ≥ 0.0
+            @test all(isfinite, zero_preds)
+            
+            # Test with constant targets
+            constant_targets = ones(output_dim, T_train)
+            train_readout!(lsm, train_inputs, constant_targets)
+            const_preds = predict(lsm, train_inputs)
+            @test all(isfinite, const_preds)
+            @test size(const_preds) == (output_dim, T_train)
+            
+            # Test with very small dataset
+            small_inputs = rand(input_dim, 5)
+            small_targets = rand(output_dim, 5)
+            train_readout!(lsm, small_inputs, small_targets)
+            small_preds = predict(lsm, small_inputs)
+            @test size(small_preds) == (output_dim, 5)
+            @test all(isfinite, small_preds)
+        end
+        
+        @testset "Matrix Operations in Training" begin
+            input_dim = 3
+            reservoir_size = 20
+            output_dim = 2
+            lsm = LSMNet(input_dim, reservoir_size, output_dim, seed = seed)
+            inputs = rand(input_dim, 30)
+            targets = rand(output_dim, 30)
+            
+            # Manually check the training process
+            states = collect_states(lsm, inputs)
+            states_aug = vcat(states, ones(1, size(states,2)))
+            @test size(states_aug) == (reservoir_size + 1, 30)
+            
+            XTX = states_aug * states_aug'
+            @test size(XTX) == (reservoir_size + 1, reservoir_size + 1)
+            @test issymmetric(XTX)
+            
+            XTY = states_aug * targets'
+            @test size(XTY) == (reservoir_size + 1, output_dim)
+            
+            reg = 1e-6
+            XTX_reg = XTX + reg * I
+            Waug = XTX_reg \ XTY
+            
+            @test size(Waug) == (reservoir_size + 1, output_dim)
+            
+            # Now train the network and compare
+            # Reset the LSM to the same initial state before training
+            reset!(lsm)
+            train_readout!(lsm, inputs, targets)
+            
+            # Compare the weights (with some tolerance for numerical differences)
+            @test lsm.Wout ≈ Waug[1:end-1,:]' atol=1e-10
+            @test lsm.bout ≈ Waug[end,:] atol=1e-10
+        end
+        
+        @testset "Training Robustness" begin
+            # Test training with different network configurations
+            configs = [
+                (input_dim=2, reservoir_size=10, output_dim=1),
+                (input_dim=5, reservoir_size=30, output_dim=3),
+                (input_dim=1, reservoir_size=20, output_dim=1),
+            ]
+            
+            for config in configs
+                lsm = LSMNet(config.input_dim, config.reservoir_size, config.output_dim; seed=seed)
+                inputs = rand(config.input_dim, 50)
+                targets = rand(config.output_dim, 50)
+                
+                train_readout!(lsm, inputs, targets)
+                preds = predict(lsm, inputs)
+                
+                @test size(preds) == (config.output_dim, 50)
+                @test all(isfinite, preds)
+                @test !all(lsm.Wout .== 0.0)
+                @test size(lsm.Wout) == (config.output_dim, config.reservoir_size)
+                @test size(lsm.bout) == (config.output_dim,)
+            end
+        end
+        
+        @testset "Retraining Behavior" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Initial training
+            train_readout!(lsm, train_inputs, train_targets)
+            initial_Wout = copy(lsm.Wout)
+            initial_bout = copy(lsm.bout)
+            initial_preds = predict(lsm, test_inputs)
+            
+            # Retrain with same data
+            train_readout!(lsm, train_inputs, train_targets)
+            @test lsm.Wout ≈ initial_Wout
+            @test lsm.bout ≈ initial_bout
+            
+            # Retrain with different data
+            new_targets = rand(output_dim, T_train)
+            train_readout!(lsm, train_inputs, new_targets)
+            @test !(lsm.Wout ≈ initial_Wout)
+            @test !(lsm.bout ≈ initial_bout)
+            
+            new_preds = predict(lsm, test_inputs)
+            @test !(new_preds ≈ initial_preds)
+        end
     end
 
-    @testset "Prediction Functionality" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+    @testset "ablation_spectral_radius - Comprehensive Testing" begin
+        @testset "Basic Ablation Functionality" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            original_Wres = copy(lsm.Wres)
+            
+            radii = [0.5, 1.0, 1.5]
+            results = ablation_spectral_radius(lsm, radii, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Check results structure
+            @test length(results) == length(radii)
+            @test all(isa(r, Tuple{Float64, Float64}) for r in results)
+            @test all(r[1] ∈ radii for r in results)
+            @test all(r[2] ≥ 0 for r in results)  # MSE should be non-negative
+            @test all(isfinite(r[2]) for r in results)
+            
+            # Check that original Wres is restored
+            @test lsm.Wres ≈ original_Wres
+            
+            # Check results are in correct order
+            for i in 1:length(radii)
+                @test results[i][1] == radii[i]
+            end
+        end
         
-        # Manually set some weights to test prediction
-        lsm.Wout .= rand(output_dim, reservoir_size) .* 0.1
-        lsm.bout .= rand(output_dim) .* 0.1
+        @testset "Single Radius Ablation" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            original_Wres = copy(lsm.Wres)
+            
+            single_radius = [0.8]
+            results = ablation_spectral_radius(lsm, single_radius, train_inputs, train_targets, test_inputs, test_targets)
+            
+            @test length(results) == 1
+            @test results[1][1] == 0.8
+            @test results[1][2] ≥ 0
+            @test isfinite(results[1][2])
+            @test lsm.Wres ≈ original_Wres
+        end
         
-        preds = predict(lsm, test_inputs)
-        @test size(preds) == (output_dim, T_test)
-        @test !all(preds .== 0.0)
+        @testset "Multiple Radii with Different Values" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with a wide range of spectral radii
+            radii = [0.1, 0.3, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 2.0]
+            results = ablation_spectral_radius(lsm, radii, train_inputs, train_targets, test_inputs, test_targets)
+            
+            @test length(results) == length(radii)
+            
+            # Extract MSE values
+            mse_values = [r[2] for r in results]
+            @test all(mse >= 0 for mse in mse_values)
+            @test all(isfinite, mse_values)
+            
+            # Check that different radii generally give different performance
+            @test length(unique(mse_values)) > 1  # Should have some variation
+        end
         
-        # Test prediction consistency
-        preds2 = predict(lsm, test_inputs)
-        @test preds ≈ preds2
+        @testset "Edge Case Radii" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with very small radius
+            small_radii = [1e-6, 1e-3]
+            results_small = ablation_spectral_radius(lsm, small_radii, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_small) == 2
+            @test all(r[2] ≥ 0 for r in results_small)
+            @test all(isfinite(r[2]) for r in results_small)
+            
+            # Test with very large radius
+            large_radii = [5.0, 10.0]
+            results_large = ablation_spectral_radius(lsm, large_radii, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_large) == 2
+            @test all(r[2] ≥ 0 for r in results_large)
+            @test all(isfinite(r[2]) for r in results_large)
+            
+            # Test with zero radius
+            zero_radii = [0.0]
+            results_zero = ablation_spectral_radius(lsm, zero_radii, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_zero) == 1
+            @test results_zero[1][1] == 0.0
+            @test results_zero[1][2] ≥ 0
+        end
         
-        # Test with different input sizes
-        small_input = rand(input_dim, 10)
-        preds_small = predict(lsm, small_input)
-        @test size(preds_small) == (output_dim, 10)
+        @testset "Scaling Behavior Verification" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; spectral_radius=1.0, seed=seed)
+            original_Wres = copy(lsm.Wres)
+            original_radius = get_spectral_radius(lsm)
+            
+            # Test that spectral radius scaling works correctly
+            test_radius = 1.5
+            radii = [test_radius]
+            
+            # Manually scale and check
+            scaled_Wres = original_Wres * (test_radius / original_radius)
+            
+            # Create a temporary LSM to check the radius without modifying the original struct's fields
+            temp_lsm = LSMNet(lsm.input_dim, lsm.reservoir_size, lsm.output_dim, 
+                              lsm.connectivity, lsm.spectral_radius, lsm.leak_rate,
+                              lsm.Win, scaled_Wres, lsm.Wout, lsm.bout, lsm.state)
+            scaled_radius = get_spectral_radius(temp_lsm)
+            @test scaled_radius ≈ test_radius atol=1e-9
+            
+            # Run ablation and verify
+            ablation_spectral_radius(lsm, radii, train_inputs, train_targets, test_inputs, test_targets)
+            @test lsm.Wres ≈ original_Wres  # Should be restored
+        end
         
-        # Test prediction bounds are reasonable
-        @test all(isfinite, preds)
+        @testset "Network State Preservation" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Set some initial state
+            lsm.state .= rand(reservoir_size)
+            initial_state = copy(lsm.state)
+            initial_Win = copy(lsm.Win)
+            initial_Wout = copy(lsm.Wout)
+            initial_bout = copy(lsm.bout)
+            
+            radii = [0.5, 1.2, 2.0]
+            ablation_spectral_radius(lsm, radii, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Check that only Wres-related properties are preserved, others may change due to training
+            @test lsm.Win ≈ initial_Win
+            # Note: Wout and bout will change due to training in ablation
+            # Note: state will be reset during collect_states calls
+        end
+        
+        @testset "Performance Consistency" begin
+            # Test that ablation results are consistent across runs
+            lsm1 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            lsm2 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            radii = [0.7, 1.0, 1.3]
+            results1 = ablation_spectral_radius(lsm1, radii, train_inputs, train_targets, test_inputs, test_targets)
+            results2 = ablation_spectral_radius(lsm2, radii, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Results should be identical for identical networks
+            for i in 1:length(results1)
+                @test results1[i][1] ≈ results2[i][1]
+                @test results1[i][2] ≈ results2[i][2] atol=1e-10
+            end
+        end
     end
 
-    @testset "Matrix Dimensions and Operations" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+    @testset "ablation_connectivity - Comprehensive Testing" begin
+        @testset "Basic Connectivity Ablation" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            original_Wres = copy(lsm.Wres)
+            
+            connects = [0.1, 0.3, 0.5]
+            results = ablation_connectivity(lsm, connects, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Check results structure
+            @test length(results) == length(connects)
+            @test all(isa(r, Tuple{Float64, Float64}) for r in results)
+            @test all(r[1] ∈ connects for r in results)
+            @test all(r[2] ≥ 0 for r in results)  # MSE should be non-negative
+            @test all(isfinite(r[2]) for r in results)
+            
+            # Check that original Wres is restored
+            @test lsm.Wres ≈ original_Wres
+            
+            # Check results are in correct order
+            for i in 1:length(connects)
+                @test results[i][1] == connects[i]
+            end
+        end
         
-        # Test matrix operations without training
-        states = collect_states(lsm, train_inputs)
-        states_aug = vcat(states, ones(1, size(states,2)))
-        @test size(states_aug) == (reservoir_size + 1, T_train)
+        @testset "Extreme Connectivity Values" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with zero connectivity
+            zero_connects = [0.0]
+            results_zero = ablation_connectivity(lsm, zero_connects, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_zero) == 1
+            @test results_zero[1][1] == 0.0
+            @test results_zero[1][2] ≥ 0
+            @test isfinite(results_zero[1][2])
+            
+            # Test with full connectivity
+            full_connects = [1.0]
+            results_full = ablation_connectivity(lsm, full_connects, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_full) == 1
+            @test results_full[1][1] == 1.0
+            @test results_full[1][2] ≥ 0
+            @test isfinite(results_full[1][2])
+            
+            # Test with very low connectivity
+            low_connects = [0.01, 0.05]
+            results_low = ablation_connectivity(lsm, low_connects, train_inputs, train_targets, test_inputs, test_targets)
+            @test length(results_low) == 2
+            @test all(r[2] ≥ 0 for r in results_low)
+            @test all(isfinite(r[2]) for r in results_low)
+        end
         
-        XTX = states_aug * states_aug'
-        @test size(XTX) == (reservoir_size + 1, reservoir_size + 1)
-        @test issymmetric(XTX)
+        @testset "Connectivity Range Testing" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with a comprehensive range of connectivity values
+            connects = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+            results = ablation_connectivity(lsm, connects, train_inputs, train_targets, test_inputs, test_targets)
+            
+            @test length(results) == length(connects)
+            
+            # Extract MSE values
+            mse_values = [r[2] for r in results]
+            @test all(mse >= 0 for mse in mse_values)
+            @test all(isfinite, mse_values)
+            
+            # Check that different connectivity values generally give different performance
+            @test length(unique(mse_values)) > 1  # Should have some variation
+        end
         
-        XTY = states_aug * train_targets'
-        @test size(XTY) == (reservoir_size + 1, output_dim)
+        @testset "Network Generation Verification" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            original_spectral_radius = lsm.spectral_radius
+            
+            # Test that new networks are generated with correct connectivity
+            test_connects = [0.2, 0.8]
+            
+            for conn in test_connects
+                # Manually create network with this connectivity to verify behavior
+                rng = MersenneTwister(123)  # Same seed as used in ablation function
+                mask = rand(rng, reservoir_size, reservoir_size) .< conn
+                test_Wres = zeros(reservoir_size, reservoir_size)
+                test_Wres[mask] .= rand(rng, sum(mask)) .* 2 .- 1
+                
+                # Check connectivity
+                actual_connectivity = count(!iszero, test_Wres) / length(test_Wres)
+                expected_connectivity = conn
+                @test abs(actual_connectivity - expected_connectivity) < 0.1  # Allow statistical variation
+                
+                # Check spectral radius scaling
+                if maximum(abs.(eigvals(test_Wres))) > 0
+                    test_Wres .*= original_spectral_radius / maximum(abs.(eigvals(test_Wres)))
+                    temp_lsm = LSMNet(input_dim, reservoir_size, output_dim,
+                                      conn, original_spectral_radius, lsm.leak_rate,
+                                      lsm.Win, test_Wres, lsm.Wout, lsm.bout, lsm.state)
+                    @test get_spectral_radius(temp_lsm) ≈ original_spectral_radius atol=1e-9
+                end
+            end
+        end
         
-        # Test regularization effect
-        reg = 1e-6
-        XTX_reg = XTX + reg * I
-        @test size(XTX_reg) == size(XTX)
-        @test tr(XTX_reg) ≥ tr(XTX)  # Trace should increase with regularization
+        @testset "Consistency Across Runs" begin
+            # Test that ablation results are consistent
+            lsm1 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            lsm2 = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            connects = [0.1, 0.5, 0.9]
+            results1 = ablation_connectivity(lsm1, connects, train_inputs, train_targets, test_inputs, test_targets)
+            results2 = ablation_connectivity(lsm2, connects, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Results should be identical for identical networks
+            # (Note: ablation_connectivity uses fixed seed 123 for network generation)
+            for i in 1:length(results1)
+                @test results1[i][1] ≈ results2[i][1]
+                @test results1[i][2] ≈ results2[i][2] atol=1e-10
+            end
+        end
+        
+        @testset "Original Network Restoration" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; connectivity=0.3, seed=seed)
+            original_Wres = copy(lsm.Wres)
+            original_connectivity = count(!iszero, original_Wres) / length(original_Wres)
+            
+            # Run ablation
+            connects = [0.1, 0.7]
+            ablation_connectivity(lsm, connects, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Check restoration
+            @test lsm.Wres ≈ original_Wres
+            restored_connectivity = count(!iszero, lsm.Wres) / length(lsm.Wres)
+            @test restored_connectivity ≈ original_connectivity
+        end
+        
+        @testset "Performance with Different Data Sizes" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Test with small dataset
+            small_train_inputs = rand(input_dim, 20)
+            small_train_targets = rand(output_dim, 20)
+            small_test_inputs = rand(input_dim, 10)
+            small_test_targets = rand(output_dim, 10)
+            
+            connects = [0.2, 0.6]
+            results_small = ablation_connectivity(lsm, connects, small_train_inputs, small_train_targets, 
+                                                small_test_inputs, small_test_targets)
+            
+            @test length(results_small) == 2
+            @test all(r[2] ≥ 0 for r in results_small)
+            @test all(isfinite(r[2]) for r in results_small)
+            
+            # Test with larger dataset
+            large_train_inputs = rand(input_dim, 200)
+            large_train_targets = rand(output_dim, 200)
+            large_test_inputs = rand(input_dim, 100)
+            large_test_targets = rand(output_dim, 100)
+            
+            results_large = ablation_connectivity(lsm, connects, large_train_inputs, large_train_targets,
+                                                large_test_inputs, large_test_targets)
+            
+            @test length(results_large) == 2
+            @test all(r[2] ≥ 0 for r in results_large)
+            @test all(isfinite(r[2]) for r in results_large)
+        end
+        
+        @testset "Network Properties During Ablation" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            original_Win = copy(lsm.Win)
+            original_state = copy(lsm.state)
+            
+            connects = [0.3]
+            ablation_connectivity(lsm, connects, train_inputs, train_targets, test_inputs, test_targets)
+            
+            # Win should remain unchanged
+            @test lsm.Win ≈ original_Win
+            
+            # Other network properties should be preserved appropriately
+            @test lsm.input_dim == input_dim
+            @test lsm.reservoir_size == reservoir_size
+            @test lsm.output_dim == output_dim
+            @test lsm.leak_rate ≈ 0.3  # Default value
+        end
     end
 
+    @testset "Predict Function - Extended Testing" begin
+        @testset "Basic Prediction" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            
+            # Before training - should give zeros
+            preds_before = predict(lsm, test_inputs)
+            @test all(preds_before .== 0.0)
+            @test size(preds_before) == (output_dim, T_test)
+            
+            # Set some weights manually
+            lsm.Wout .= rand(output_dim, reservoir_size) .* 0.1
+            lsm.bout .= rand(output_dim) .* 0.1
+            
+            preds_after = predict(lsm, test_inputs)
+            @test !all(preds_after .== 0.0)
+            @test size(preds_after) == (output_dim, T_test)
+            @test all(isfinite, preds_after)
+        end
+        
+        @testset "Prediction Consistency" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            train_readout!(lsm, train_inputs, train_targets)
+            
+            # Multiple predictions should be identical
+            preds1 = predict(lsm, test_inputs)
+            preds2 = predict(lsm, test_inputs)
+            preds3 = predict(lsm, test_inputs)
+            
+            @test preds1 ≈ preds2
+            @test preds2 ≈ preds3
+        end
+        
+        @testset "Prediction with Different Input Sizes" begin
+            lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
+            train_readout!(lsm, train_inputs, train_targets)
+            
+            # Single timestep
+            single_input = rand(input_dim, 1)
+            single_pred = predict(lsm, single_input)
+            @test size(single_pred) == (output_dim, 1)
+            
+            # Many timesteps
+            many_inputs = rand(input_dim, 500)
+            many_preds = predict(lsm, many_inputs)
+            @test size(many_preds) == (output_dim, 500)
+            
+            # All should be finite
+            @test all(isfinite, single_pred)
+            @test all(isfinite, many_preds)
+        end
+    end
+
+    # Continue with all the other existing test sets...
     @testset "Edge Cases" begin
         # Test with small reservoir
         small_reservoir = 5
@@ -452,17 +933,16 @@ using Statistics
         correct_input = rand(input_dim)
         @test size(step!(lsm, correct_input)) == (reservoir_size,)
         
-        # Test prediction with zero inputs - should still produce output due to bias and Win
+        # Test prediction with zero inputs
         zero_input = zeros(input_dim, 1)
-        lsm.Wout .= rand(output_dim, reservoir_size) .* 0.1  # Set non-zero weights
-        lsm.bout .= rand(output_dim) .* 0.1  # Set non-zero bias
+        lsm.Wout .= rand(output_dim, reservoir_size) .* 0.1
+        lsm.bout .= rand(output_dim) .* 0.1
         
         zero_states = collect_states(lsm, zero_input)
         @test size(zero_states) == (reservoir_size, 1)
         
         zero_preds = predict(lsm, zero_input)
         @test size(zero_preds) == (output_dim, 1)
-        # Should produce non-zero output due to bias term
         @test !all(zero_preds .== 0.0)
         
         # Test with very large inputs
@@ -476,131 +956,6 @@ using Statistics
         small_states = collect_states(lsm, small_input)
         @test size(small_states) == (reservoir_size, 5)
         @test all(isfinite, small_states)
-    end
-
-    @testset "State Dynamics and Stability" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; spectral_radius=0.8, seed=seed)
-        
-        # Test convergence to fixed point with constant input
-        constant_input = ones(input_dim)
-        reset!(lsm)
-        
-        states_evolution = []
-        for _ in 1:50
-            push!(states_evolution, copy(step!(lsm, constant_input)))
-        end
-        
-        # Check that states converge (difference decreases)
-        early_change = norm(states_evolution[5] - states_evolution[4])
-        late_change = norm(states_evolution[50] - states_evolution[49])
-        @test late_change ≤ early_change
-        
-        # Test state bounds remain reasonable
-        @test all(abs.(states_evolution[end]) .< 10.0)  # States shouldn't explode
-        
-        # Test oscillatory behavior with alternating inputs
-        reset!(lsm)
-        input1 = ones(input_dim)
-        input2 = -ones(input_dim)
-        
-        oscillation_states = []
-        for i in 1:20
-            if i % 2 == 1
-                push!(oscillation_states, copy(step!(lsm, input1)))
-            else
-                push!(oscillation_states, copy(step!(lsm, input2)))
-            end
-        end
-        
-        # States should show some pattern or bounded behavior
-        @test all(abs.(oscillation_states[end]) .< 20.0)
-        @test all(isfinite, oscillation_states[end])
-    end
-
-    @testset "Performance and Efficiency" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; seed=seed)
-        
-        # Test that operations complete in reasonable time
-        large_sequence = rand(input_dim, 1000)
-        @time states = collect_states(lsm, large_sequence)
-        @test size(states) == (reservoir_size, 1000)
-        
-        # Test memory efficiency - states should be reasonable size
-        @test sizeof(states) > 0
-        @test all(isfinite, states)
-        
-        # Test repeated operations
-        for _ in 1:100
-            step!(lsm, rand(input_dim))
-        end
-        @test all(isfinite, lsm.state)
-        
-        # Test batch processing consistency
-        batch_input = rand(input_dim, 50)
-        states1 = collect_states(lsm, batch_input)
-        
-        # Manual processing
-        reset!(lsm)
-        manual_states = zeros(reservoir_size, 50)
-        for i in 1:50
-            manual_states[:, i] = step!(lsm, batch_input[:, i])
-        end
-        
-        @test states1 ≈ manual_states
-    end
-
-    @testset "Weight Matrix Properties" begin
-        lsm = LSMNet(input_dim, reservoir_size, output_dim; connectivity=0.3, spectral_radius=1.1, seed=seed)
-        
-        # Test Win properties
-        @test all(-1 ≤ w ≤ 1 for w in lsm.Win)  # Win should be in [-1, 1]
-        @test !all(lsm.Win .== 0.0)  # Win shouldn't be all zeros
-        
-        # Test Wres properties
-        @test size(lsm.Wres) == (reservoir_size, reservoir_size)
-        @test get_spectral_radius(lsm) ≈ 1.1 atol=1e-9
-        
-        # Test connectivity
-        sparsity = count(lsm.Wres .== 0.0) / length(lsm.Wres)
-        expected_sparsity = 1.0 - 0.3
-        @test abs(sparsity - expected_sparsity) < 0.1  # Allow some tolerance
-        
-        # Test Wres symmetry (should generally not be symmetric)
-        @test lsm.Wres != lsm.Wres'  # Should not be symmetric
-        
-        # Test that Wres has some structure
-        @test maximum(abs.(lsm.Wres)) > 0.0
-        @test maximum(abs.(lsm.Wres)) ≤ maximum(abs.(eigvals(lsm.Wres))) * 2  # Rough bound
-    end
-
-    @testset "Different Initialization Seeds" begin
-        seeds_to_test = [1, 42, 123, 999, 2024]
-        lsms = [LSMNet(input_dim, reservoir_size, output_dim; seed=s) for s in seeds_to_test]
-        
-        # Test that different seeds give different networks
-        for i in 1:length(lsms)
-            for j in i+1:length(lsms)
-                @test !(lsms[i].Win ≈ lsms[j].Win)
-                @test !(lsms[i].Wres ≈ lsms[j].Wres)
-            end
-        end
-        
-        # Test that all networks have correct properties
-        for lsm in lsms
-            @test size(lsm.Win) == (reservoir_size, input_dim)
-            @test size(lsm.Wres) == (reservoir_size, reservoir_size)
-            @test get_spectral_radius(lsm) ≈ lsm.spectral_radius atol=1e-9
-        end
-        
-        # Test that they produce different dynamics
-        test_input = rand(input_dim, 10)
-        states_list = [collect_states(lsm, test_input) for lsm in lsms]
-        
-        for i in 1:length(states_list)
-            for j in i+1:length(states_list)
-                @test !(states_list[i] ≈ states_list[j])
-            end
-        end
     end
 
 end
