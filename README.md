@@ -8,18 +8,18 @@
 
 ---
 
-## ✨ Features
+##  Features
 
-- 🧠 **Two Representations**: Choose between `StateVectorRep` and `TensorNetworkRep` backends.
-- ⚛️ **Custom Quantum Circuits**: Build and run quantum circuits with gates like `X`, `H`, `CNOT`, and user-defined unitaries.
-- 🕸️ **Lattice & Graph-based Circuits**: Generate circuits from 1D chains and 2D lattice graphs.
-- 📈 **Measurement & Probabilities**: Simulate measurements in the `X`, `Y`, `Z` bases and extract Born rule probabilities.
-- 🔌 **ITensor Integration**: Efficient tensor contraction via [ITensors.jl](https://itensor.org/docs.jl/).
-- 🚀 **High Performance**: Sparse matrix support, multi-threading, and distributed parallelism (WIP).
+-  **Two Representations**: Choose between `StateVectorRep` and `TensorNetworkRep` backends.
+-  **Custom Quantum Circuits**: Build and run quantum circuits with gates like `X`, `H`, `CNOT`, and user-defined unitaries.
+-  **Lattice & Graph-based Circuits**: Generate circuits from 1D chains and 2D lattice graphs.
+-  **Measurement & Probabilities**: Simulate measurements in the `X`, `Y`, `Z` bases and extract Born rule probabilities.
+-  **ITensor Integration**: Efficient tensor contraction via [ITensors.jl](https://itensor.org/docs.jl/).
+-  **High Performance**: Sparse matrix support, multi-threading, and distributed parallelism (WIP).
 
 ---
 
-## 📦 Installation
+##  Installation
 
 1. Quromorphic.jl requires Julia 1.9 or later.
 
