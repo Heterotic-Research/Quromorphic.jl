@@ -6,8 +6,8 @@ module Quromorphic
 export allo
 
 allo() = "Hello from Quromorphic!"
-include("QSim/QSim.jl")    # loads src/QSim/QSim.jl
-include("Neuro/LSM.jl")   # loads src/Neuro/LSM.jl
+include("Quantum/QSim.jl")    # loads src/QSim/QSim.jl
+include("Neuromorphic/LSM.jl")   # loads src/Neuro/LSM.jl
  
 using .QSim  
 using .LSM
