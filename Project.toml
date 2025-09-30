@@ -1,7 +1,7 @@
 name = "Quromorphic"
 uuid = "ad75e402-0094-4822-903c-3542ee61ae4f"
 authors = ["jajapuramshivasai <jajapuramshivasai@gmail.com> and contributors"]
-version = "1.0.0-DEV"
+version = "0.1.0-alpha"
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
