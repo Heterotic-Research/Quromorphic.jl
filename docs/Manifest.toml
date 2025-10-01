@@ -2,7 +2,7 @@
 
 julia_version = "1.11.5"
 manifest_format = "2.0"
-project_hash = "5fe4ae77791ece807c5377c055eabb1b4b386976"
+project_hash = "2ec9950f3c526323f8d319636c253cb93d5e6f43"
 
 [[deps.ANSIColoredPrinters]]
 git-tree-sha1 = "574baf8110975760d391c710b6341da1afa48d8c"
@@ -257,6 +257,12 @@ version = "1.5.0"
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 version = "1.11.0"
+
+[[deps.Quromorphic]]
+deps = ["Documenter", "DocumenterTools", "LinearAlgebra", "Random", "Statistics"]
+path = "../Heterotic.jl"
+uuid = "ad75e402-0094-4822-903c-3542ee61ae4f"
+version = "0.1.0-alpha"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
