@@ -9,7 +9,6 @@
 
 ---
 
-
 ##  Installation
 
 1. Quromorphic.jl requires Julia 1.9 or later.
