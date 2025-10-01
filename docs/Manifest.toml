@@ -260,7 +260,7 @@ version = "1.11.0"
 
 [[deps.Quromorphic]]
 deps = ["Documenter", "DocumenterTools", "LinearAlgebra", "Random", "Statistics"]
-path = "/Users/shivasai/Desktop/Heterotic.jl"
+path = "../Heterotic.jl"
 uuid = "ad75e402-0094-4822-903c-3542ee61ae4f"
 version = "0.1.0-alpha"
 
