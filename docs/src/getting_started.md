@@ -20,7 +20,7 @@ cnot!(s, 1, 2)
 prstate(s)
 ```
 
-## BASIC NEUROMORPHIC COMPUTING 
+## Basic Neuromorphic Computing
 
 ```julia
 using Quromorphic.LSM
