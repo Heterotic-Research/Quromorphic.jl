@@ -10,7 +10,7 @@ using Test
     @testset "test_QSim.jl" begin
         include("test_QSim.jl")
     end
-    @testset "test_LSM.jl" begin
-        include("test_LSM.jl")
+    @testset "test_LIF.jl" begin
+        include("test_LIF.jl")
     end
 end

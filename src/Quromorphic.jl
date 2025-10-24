@@ -7,12 +7,12 @@ export allo
 
 allo() = "Hello from Quromorphic!"
 include("Quantum/QSim.jl")    # loads src/QSim/QSim.jl
-include("Neuromorphic/LSM.jl")   # loads src/Neuro/LSM.jl
+include("Neuromorphic/LIF.jl")   # loads src/Neuro/LSM.jl
  
 using .QSim  
-using .LSM
+using .LIF
 
-export LSM
+export LIF
 export QSim 
 
 
