@@ -19,9 +19,11 @@ makedocs(;
         "Getting Started" => "getting_started.md",
         "API Reference" => [
             "Quantum Simulation" => "api/qsim.md",
+            "Quantum Information" => "api/qinfo.md",  
             "Liquid State Machines" => "api/lsm.md",
         ],
     ],
+    checkdocs = :none # (to disable warnings about undocumented functions)
 )
 
 deploydocs(;
