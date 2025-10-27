@@ -6,22 +6,25 @@ DocMeta.setdocmeta!(Quromorphic, :DocTestSetup, :(using Quromorphic); recursive=
 makedocs(;
     modules=[Quromorphic],
     authors="jajapuramshivasai <jajapuramshivasai@gmail.com> and contributors",
-    repo="https://github.com/Heterotic-Research/Quromorphic.jl/blob/{commit}{path}#{line}",
+    repo=Documenter.Remotes.GitHub("Heterotic-Research", "Quromorphic.jl"),
     sitename="Quromorphic.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://Heterotic-Research.github.io/Quromorphic.jl",
         edit_link="main",
         assets=String[],
+        repolink="https://github.com/Heterotic-Research/Quromorphic.jl",
     ),
     pages=[
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
         "API Reference" => [
             "Quantum Simulation" => "api/qsim.md",
+            "Quantum Information" => "api/qinfo.md",  
             "Liquid State Machines" => "api/lsm.md",
         ],
     ],
+    checkdocs = :none # (to disable warnings about undocumented functions)
 )
 
 deploydocs(;

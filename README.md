@@ -1,6 +1,6 @@
 # Quromorphic.jl
 
-![Julia](https://img.shields.io/badge/Julia-1.11+-9558B2?logo=julia&logoColor=white)
+![Julia](https://img.shields.io/badge/Julia-1.12+-9558B2?logo=julia&logoColor=white)
 [![Build Status](https://github.com/Heterotic-Research/Quromorphic.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/Heterotic-Research/Quromorphic.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage](https://codecov.io/gh/Heterotic-Research/Quromorphic.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Heterotic-Research/Quromorphic.jl)
 [![Documentation](https://github.com/Heterotic-Research/Quromorphic.jl/actions/workflows/docs.yml/badge.svg)](https://github.com/Heterotic-Research/Quromorphic.jl/actions/workflows/docs.yml)
@@ -11,7 +11,7 @@
 
 ##  Installation
 
-1. Quromorphic.jl requires Julia 1.9 or later.
+1. Quromorphic.jl requires Julia 1.12 or later.
 
 2. Clone this repository:
 ```julia

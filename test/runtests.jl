@@ -13,4 +13,7 @@ using Test
     @testset "test_LSM.jl" begin
         include("test_LSM.jl")
     end
+    @testset "test_QInfo.jl" begin
+        include("test_QInfo.jl")
+    end
 end
